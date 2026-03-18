@@ -28,9 +28,11 @@ export const landingPageHtml = `<!doctype html>
       }
 
       main {
-        max-width: 760px;
+        max-width: 980px;
         margin: 48px auto;
         padding: 0 20px;
+        display: grid;
+        gap: 18px;
       }
 
       .panel {
@@ -103,6 +105,41 @@ export const landingPageHtml = `<!doctype html>
         font-size: 0.85rem;
         color: var(--muted);
       }
+
+      .row {
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 10px;
+        align-items: center;
+      }
+
+      code {
+        background: #10151d;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1px 6px;
+      }
+
+      .quick-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .quick-buttons button {
+        width: auto;
+        margin-top: 0;
+        padding: 7px 10px;
+        font-size: 0.85rem;
+        background: #20283a;
+        color: var(--text);
+      }
+
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
     </style>
   </head>
   <body>
@@ -124,6 +161,46 @@ export const landingPageHtml = `<!doctype html>
         <div id="result" class="result">Esperando mensaje...</div>
         <div id="meta" class="tiny"></div>
       </section>
+
+      <section class="panel">
+        <h1>REST rápido</h1>
+        <p>Ejecuta cualquier endpoint REST y visualiza el resultado.</p>
+
+        <form id="rest-form" class="stack">
+          <div class="row">
+            <label for="rest-method">Metodo</label>
+            <select id="rest-method" name="method">
+              <option>GET</option>
+              <option>POST</option>
+              <option>PUT</option>
+              <option>DELETE</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="rest-path">Ruta</label>
+            <input id="rest-path" name="path" placeholder="/api/users" value="/api/users" />
+          </div>
+
+          <div>
+            <label for="rest-body">Body JSON (opcional para GET/DELETE)</label>
+            <textarea id="rest-body" name="body" placeholder='{"username":"ana","email":"ana@mail.com"}'></textarea>
+          </div>
+
+          <button id="rest-send" type="submit">Ejecutar request</button>
+        </form>
+
+        <div class="quick-buttons">
+          <button type="button" data-method="GET" data-path="/api/users" data-body="">GET /api/users</button>
+          <button type="button" data-method="POST" data-path="/api/users" data-body='{"username":"demo","email":"demo@mail.com"}'>POST /api/users</button>
+          <button type="button" data-method="GET" data-path="/api/conversations" data-body="">GET /api/conversations</button>
+          <button type="button" data-method="POST" data-path="/api/conversations" data-body='{"user_id":"<uuid>","title":"Primera conversacion"}'>POST /api/conversations</button>
+          <button type="button" data-method="GET" data-path="/api/messages/<uuid>" data-body="">GET /api/messages/:id</button>
+        </div>
+
+        <div id="rest-meta" class="tiny"></div>
+        <div id="rest-result" class="result">Esperando request REST...</div>
+      </section>
     </main>
 
     <script>
@@ -131,14 +208,31 @@ export const landingPageHtml = `<!doctype html>
       const send = document.getElementById("send");
       const result = document.getElementById("result");
       const meta = document.getElementById("meta");
+      const restForm = document.getElementById("rest-form");
+      const restSend = document.getElementById("rest-send");
+      const restMethod = document.getElementById("rest-method");
+      const restPath = document.getElementById("rest-path");
+      const restBody = document.getElementById("rest-body");
+      const restMeta = document.getElementById("rest-meta");
+      const restResult = document.getElementById("rest-result");
+      const quickButtons = document.querySelectorAll(".quick-buttons button");
 
       function setLoading(isLoading) {
         send.disabled = isLoading;
         send.textContent = isLoading ? "Enviando..." : "Enviar";
       }
 
+      function setRestLoading(isLoading) {
+        restSend.disabled = isLoading;
+        restSend.textContent = isLoading ? "Ejecutando..." : "Ejecutar request";
+      }
+
       function updateMeta(text) {
         meta.textContent = text;
+      }
+
+      function updateRestMeta(text) {
+        restMeta.textContent = text;
       }
 
       function parseSseChunk(buffer, onEvent) {
@@ -253,6 +347,84 @@ export const landingPageHtml = `<!doctype html>
           updateMeta("Fallo al conectar");
         } finally {
           setLoading(false);
+        }
+      });
+
+      quickButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          restMethod.value = button.dataset.method || "GET";
+          restPath.value = button.dataset.path || "/api/users";
+          restBody.value = button.dataset.body || "";
+        });
+      });
+
+      restForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const method = restMethod.value;
+        const path = restPath.value.trim();
+        const bodyText = restBody.value.trim();
+
+        if (!path.startsWith("/")) {
+          restResult.textContent = "La ruta debe empezar por /";
+          return;
+        }
+
+        let parsedBody;
+        if (bodyText && method !== "GET" && method !== "DELETE") {
+          try {
+            parsedBody = JSON.parse(bodyText);
+          } catch {
+            restResult.textContent = "Body JSON invalido";
+            return;
+          }
+        }
+
+        setRestLoading(true);
+        updateRestMeta("Conectando...");
+        restResult.textContent = "";
+
+        const startedAt = Date.now();
+        try {
+          const response = await fetch(path, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: parsedBody ? JSON.stringify(parsedBody) : undefined,
+          });
+
+          const elapsedMs = Date.now() - startedAt;
+          const contentType = response.headers.get("content-type") || "";
+          let body;
+
+          if (contentType.includes("application/json")) {
+            const json = await response.json();
+            body = JSON.stringify(json, null, 2);
+          } else {
+            body = await response.text();
+          }
+
+          const headersObject = {};
+          response.headers.forEach((value, key) => {
+            headersObject[key] = value;
+          });
+
+          updateRestMeta(
+            "Status " + response.status + " | " + elapsedMs + "ms",
+          );
+          restResult.textContent =
+            "REQUEST\\n" +
+            method +
+            " " +
+            path +
+            "\\n\\nRESPONSE HEADERS\\n" +
+            JSON.stringify(headersObject, null, 2) +
+            "\\n\\nRESPONSE BODY\\n" +
+            body;
+        } catch (error) {
+          restResult.textContent =
+            error instanceof Error ? error.message : "Error al ejecutar la request";
+          updateRestMeta("Fallo al conectar");
+        } finally {
+          setRestLoading(false);
         }
       });
     </script>
