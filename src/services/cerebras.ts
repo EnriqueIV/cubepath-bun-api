@@ -1,19 +1,8 @@
 import { env } from "../config/env";
+import type { ChatMessage, ProviderStreamChunk } from "./openrouter";
 
-export type ChatRole = "system" | "user" | "assistant";
-
-export type ChatMessage = {
-  role: ChatRole;
-  content: string;
-};
-
-export type ProviderStreamChunk = {
-  content?: string;
-  reasoningTokens?: number;
-};
-
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_DEFAULT_MODEL = "openrouter/free";
+const CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1/chat/completions";
+const CEREBRAS_DEFAULT_MODEL = "llama3.1-8b";
 
 function maskApiKey(apiKey: string): string {
   return apiKey.length > 10 ? `${apiKey.slice(0, 6)}...${apiKey.slice(-4)}` : "***";
@@ -33,33 +22,33 @@ function decodeSseLine(rawLine: string): unknown | null {
   }
 }
 
-export function hasOpenRouterKey(): boolean {
-  return env.OPENROUTER_API_KEY.trim().length > 0;
+export function hasCerebrasKey(): boolean {
+  return env.CEREBRAS_API_KEY.trim().length > 0;
 }
 
-console.log("[openrouter] Proveedor inicializado");
+console.log("[cerebras] Proveedor inicializado");
 console.log(
-  `[openrouter] API key ${
-    hasOpenRouterKey() ? `detectada (${maskApiKey(env.OPENROUTER_API_KEY)})` : "no configurada"
+  `[cerebras] API key ${
+    hasCerebrasKey() ? `detectada (${maskApiKey(env.CEREBRAS_API_KEY)})` : "no configurada"
   }`,
 );
 
-export async function streamFromOpenRouter(params: {
+export async function streamFromCerebras(params: {
   messages: ChatMessage[];
   model?: string;
 }): Promise<AsyncGenerator<ProviderStreamChunk>> {
-  if (!hasOpenRouterKey()) {
-    throw new Error("OPENROUTER_API_KEY no configurada");
+  if (!hasCerebrasKey()) {
+    throw new Error("CEREBRAS_API_KEY no configurada");
   }
 
-  const response = await fetch(OPENROUTER_BASE_URL, {
+  const response = await fetch(CEREBRAS_BASE_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      Authorization: `Bearer ${env.CEREBRAS_API_KEY}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: OPENROUTER_DEFAULT_MODEL,
+      model: CEREBRAS_DEFAULT_MODEL,
       messages: params.messages,
       stream: true,
     }),
@@ -68,7 +57,7 @@ export async function streamFromOpenRouter(params: {
   if (!response.ok || !response.body) {
     const errorText = await response.text();
     throw new Error(
-      `OpenRouter ${response.status}: ${errorText || "Respuesta no valida del proveedor"}`,
+      `Cerebras ${response.status}: ${errorText || "Respuesta no valida del proveedor"}`,
     );
   }
 

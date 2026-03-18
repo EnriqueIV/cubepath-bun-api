@@ -112,8 +112,8 @@ export const landingPageHtml = `<!doctype html>
         <p>Prueba el endpoint <code>POST /chat</code> desde esta página.</p>
 
         <form id="chat-form">
-          <label for="model">Modelo</label>
-          <input id="model" name="model" value="openrouter/free" />
+          <label for="model">Modelo (opcional)</label>
+          <input id="model" name="model" placeholder="Auto por proveedor (round robin)" />
 
           <label for="message">Mensaje</label>
           <textarea id="message" name="message" placeholder="Escribe una pregunta..."></textarea>
@@ -174,7 +174,7 @@ export const landingPageHtml = `<!doctype html>
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
 
-        const model = document.getElementById("model").value.trim() || "openrouter/free";
+        const model = document.getElementById("model").value.trim();
         const message = document.getElementById("message").value.trim();
 
         if (!message) {
@@ -186,11 +186,14 @@ export const landingPageHtml = `<!doctype html>
         updateMeta("Conectando...");
         setLoading(true);
 
+        const payload = { message };
+        if (model) payload.model = model;
+
         try {
           const response = await fetch("/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model, message }),
+            body: JSON.stringify(payload),
           });
 
           if (!response.ok || !response.body) {
@@ -210,7 +213,12 @@ export const landingPageHtml = `<!doctype html>
             sseBuffer = parseSseChunk(sseBuffer, (eventName, data) => {
               if (eventName === "meta") {
                 updateMeta(
-                  "requestId: " + (data.requestId ?? "-") + " | model: " + (data.model ?? model),
+                  "requestId: " +
+                    (data.requestId ?? "-") +
+                    " | provider: " +
+                    (data.provider ?? "-") +
+                    " | model: " +
+                    (data.model ?? model || "(auto)"),
                 );
               }
 

@@ -1,17 +1,62 @@
-import { openrouter } from "../services/openrouter";
-
-type ChatRole = "system" | "user" | "assistant";
-
-type ChatMessage = {
-  role: ChatRole;
-  content: string;
-};
+import {
+  hasOpenRouterKey,
+  streamFromOpenRouter,
+  type ChatMessage,
+} from "../services/openrouter";
+import { hasGroqKey, streamFromGroq } from "../services/groq";
+import { hasCerebrasKey, streamFromCerebras } from "../services/cerebras";
 
 type ChatRequestBody = {
   message?: string;
   messages?: ChatMessage[];
   model?: string;
 };
+
+type ProviderName = "openrouter" | "groq" | "cerebras";
+
+type ChatProvider = {
+  name: ProviderName;
+  hasKey: () => boolean;
+  stream: (params: {
+    messages: ChatMessage[];
+    model?: string;
+  }) => Promise<AsyncGenerator<{ content?: string; reasoningTokens?: number }>>;
+};
+
+const chatProviders: ChatProvider[] = [
+  {
+    name: "openrouter",
+    hasKey: hasOpenRouterKey,
+    stream: streamFromOpenRouter,
+  },
+  {
+    name: "groq",
+    hasKey: hasGroqKey,
+    stream: streamFromGroq,
+  },
+  {
+    name: "cerebras",
+    hasKey: hasCerebrasKey,
+    stream: streamFromCerebras,
+  },
+];
+
+let providerCursor = 0;
+
+function pickProviderRoundRobin(): ChatProvider | null {
+  const enabledProviders = chatProviders.filter((provider) => provider.hasKey());
+  if (enabledProviders.length === 0) {
+    return null;
+  }
+
+  const selected = enabledProviders[providerCursor % enabledProviders.length];
+  if (!selected) {
+    return null;
+  }
+
+  providerCursor = (providerCursor + 1) % enabledProviders.length;
+  return selected;
+}
 
 function sseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -68,8 +113,22 @@ export async function handleChatRoute(
     );
   }
 
-  const model = body.model ?? "openrouter/free";
-  console.log(`[chat][${requestId}] Modelo seleccionado: ${model}`);
+  const selectedProvider = pickProviderRoundRobin();
+
+  if (!selectedProvider) {
+    console.error(`[chat][${requestId}] No hay proveedores de chat configurados`);
+    return Response.json(
+      {
+        error:
+          "No hay proveedores configurados. Define OPENROUTER_API_KEY, GROQ_API_KEY o CEREBRAS_API_KEY.",
+      },
+      { status: 500 },
+    );
+  }
+
+  const model = body.model;
+  console.log(`[chat][${requestId}] Proveedor seleccionado: ${selectedProvider.name}`);
+  console.log(`[chat][${requestId}] Modelo solicitado: ${model ?? "(auto por proveedor)"}`);
   console.log(`[chat][${requestId}] Numero de mensajes: ${messages.length}`);
   console.log(
     `[chat][${requestId}] Preview primer mensaje:`,
@@ -82,13 +141,12 @@ export async function handleChatRoute(
   );
 
   try {
-    console.log(`[chat][${requestId}] Solicitando stream a OpenRouter...`);
-    const openRouterStream = await openrouter.chat.send({
-      chatGenerationParams: {
-        model,
-        messages,
-        stream: true,
-      },
+    console.log(
+      `[chat][${requestId}] Solicitando stream al proveedor ${selectedProvider.name}...`,
+    );
+    const providerStream = await selectedProvider.stream({
+      model,
+      messages,
     });
     console.log(`[chat][${requestId}] Stream recibido, abriendo SSE al cliente`);
 
@@ -104,15 +162,16 @@ export async function handleChatRoute(
             sseEvent("meta", {
               requestId,
               model,
+              provider: selectedProvider.name,
             }),
           ),
         );
 
         try {
-          for await (const chunk of openRouterStream) {
+          for await (const chunk of providerStream) {
             chunkCount += 1;
 
-            const content = chunk.choices[0]?.delta?.content;
+            const content = chunk.content;
             if (content) {
               responseChars += content.length;
               controller.enqueue(
@@ -127,13 +186,8 @@ export async function handleChatRoute(
               );
             }
 
-            const chunkReasoningTokens =
-              chunk.usage?.completionTokensDetails?.reasoningTokens;
-            if (
-              chunkReasoningTokens !== undefined &&
-              chunkReasoningTokens !== null
-            ) {
-              reasoningTokens = chunkReasoningTokens;
+            if (typeof chunk.reasoningTokens === "number") {
+              reasoningTokens = chunk.reasoningTokens;
               controller.enqueue(
                 encoder.encode(
                   sseEvent("usage", {
@@ -172,7 +226,7 @@ export async function handleChatRoute(
           controller.enqueue(
             encoder.encode(
               sseEvent("error", {
-                error: "Fallo durante el stream de OpenRouter",
+                error: `Fallo durante el stream de ${selectedProvider.name}`,
                 details: streamErrorMessage,
               }),
             ),
@@ -195,14 +249,14 @@ export async function handleChatRoute(
     const message =
       error instanceof Error
         ? error.message
-        : "Error inesperado llamando a OpenRouter";
+        : `Error inesperado llamando a ${selectedProvider.name}`;
     console.error(
-      `[chat][${requestId}] Error llamando a OpenRouter tras ${Date.now() - startedAt}ms: ${message}`,
+      `[chat][${requestId}] Error llamando a ${selectedProvider.name} tras ${Date.now() - startedAt}ms: ${message}`,
     );
 
     return Response.json(
       {
-        error: "No se pudo completar el chat con OpenRouter.",
+        error: `No se pudo completar el chat con ${selectedProvider.name}.`,
         details: message,
       },
       { status: 502 },
